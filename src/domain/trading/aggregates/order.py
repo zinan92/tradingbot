@@ -4,8 +4,12 @@ from enum import Enum
 from typing import List, Optional
 from uuid import UUID, uuid4
 
-# TODO: Import value objects when created
-# from ..value_objects import OrderId, Symbol, Quantity, OrderType, Money
+# Import proper value objects
+from ..value_objects.symbol import Symbol
+from ..value_objects.quantity import Quantity
+from ..value_objects.price import Price
+from ..value_objects.order_type import OrderType
+from ..value_objects.side import Side
 
 from ..events import OrderPlaced, OrderCancelled, OrderFilled
 
@@ -24,12 +28,14 @@ class Order:
     
     Represents a trading order with its complete lifecycle.
     Enforces business rules around order state transitions.
+    Uses proper value objects for type safety and domain modeling.
     """
     id: UUID
-    symbol: str          # TODO: Replace with Symbol value object
-    quantity: int        # TODO: Replace with Quantity value object
-    order_type: str      # TODO: Replace with OrderType value object
-    price: Optional[float] = None  # TODO: Replace with Money value object
+    symbol: Symbol          # Value object for symbol
+    quantity: Quantity      # Value object for quantity
+    order_type: OrderType   # Value object for order type
+    side: Side             # Value object for buy/sell side
+    price: Optional[Price] = None  # Value object for price
     status: OrderStatus = OrderStatus.PENDING
     created_at: datetime = field(default_factory=datetime.utcnow)
     filled_at: Optional[datetime] = None
@@ -43,34 +49,43 @@ class Order:
     
     @classmethod
     def create(cls, 
-              symbol: str,          # TODO: Symbol
-              quantity: int,        # TODO: Quantity  
-              order_type: str,      # TODO: OrderType
-              price: Optional[float] = None,  # TODO: Optional[Money]
+              symbol: str,
+              quantity: int,
+              order_type: str,
+              side: str = "BUY",
+              price: Optional[float] = None,
               portfolio_id: Optional[UUID] = None):  # Portfolio that placed the order
-        """Factory method to create a new order"""
+        """Factory method to create a new order with proper value objects"""
         from decimal import Decimal
         
         order_id = uuid4()
         
+        # Create value objects with validation
+        symbol_vo = Symbol(symbol)
+        quantity_vo = Quantity(quantity)
+        order_type_vo = OrderType.from_string(order_type)
+        side_vo = Side.from_string(side)
+        price_vo = Price(price, "USD") if price else None
+        
         # Create new order
         order = cls(
             id=order_id,
-            symbol=symbol,
-            quantity=quantity, 
-            order_type=order_type,
-            price=price,
+            symbol=symbol_vo,
+            quantity=quantity_vo,
+            order_type=order_type_vo,
+            side=side_vo,
+            price=price_vo,
             status=OrderStatus.PENDING
         )
         
-        # Create and record domain event
+        # Create and record domain event with value objects
         event = OrderPlaced(
             order_id=order_id,
             portfolio_id=portfolio_id or UUID(int=0),  # Use null UUID if not provided
-            symbol=symbol,
-            quantity=quantity,
-            order_type=order_type,
-            price=Decimal(str(price)) if price else None
+            symbol=symbol_vo.value,
+            quantity=quantity_vo.value,
+            order_type=order_type_vo.value,
+            price=price_vo.to_decimal() if price_vo else None
         )
         order._add_event(event)
         
@@ -113,10 +128,10 @@ class Order:
             reason=reason or "No reason provided",
             cancelled_at=self.cancelled_at,
             cancelled_by=cancelled_by or UUID(int=0),  # Use null UUID if not provided
-            original_quantity=self.quantity,
-            symbol=self.symbol,
-            order_type=self.order_type,
-            unfilled_quantity=self.quantity  # Assuming no partial fills for now
+            original_quantity=self.quantity.value,
+            symbol=self.symbol.value,
+            order_type=self.order_type.value,
+            unfilled_quantity=self.quantity.value  # Assuming no partial fills for now
         )
         self._add_event(event)
         
@@ -152,9 +167,9 @@ class Order:
         # Create and record domain event
         event = OrderFilled(
             order_id=self.id,
-            symbol=self.symbol,
-            quantity=self.quantity,
-            fill_price=Decimal(str(fill_price or self.price or 0)),
+            symbol=self.symbol.value,
+            quantity=self.quantity.value,
+            fill_price=Decimal(str(fill_price or (self.price.to_float() if self.price else 0))),
             broker_order_id=self.broker_order_id
         )
         self._add_event(event)
@@ -202,8 +217,8 @@ class Order:
         from ..events import OrderFullyCancelled
         event = OrderFullyCancelled(
             order_id=self.id,
-            symbol=self.symbol,
-            quantity=self.quantity,
+            symbol=self.symbol.value,
+            quantity=self.quantity.value,
             confirmed_at=self.broker_confirmed_at,
             broker_order_id=self.broker_order_id
         )

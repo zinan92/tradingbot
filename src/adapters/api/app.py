@@ -26,9 +26,8 @@ from src.infrastructure.brokers.mock_broker import MockBrokerService
 from src.infrastructure.messaging.in_memory_event_bus import InMemoryEventBus
 from src.domain.trading.aggregates.portfolio import Portfolio
 
-# Import the new trading router
-# Note: Uncomment this and comment out conflicting endpoints below to use the router
-# from src.adapters.api.routers import trading_router
+# Import routers
+from src.adapters.api.routers import trading_router, backtest_router
 
 # Create FastAPI app
 app = FastAPI(
@@ -37,8 +36,9 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Include the trading router (uncomment to use)
-# app.include_router(trading_router)
+# Include routers
+app.include_router(trading_router.router)
+app.include_router(backtest_router.router)
 
 # Initialize infrastructure (in production, use dependency injection)
 portfolio_repo = InMemoryPortfolioRepository()

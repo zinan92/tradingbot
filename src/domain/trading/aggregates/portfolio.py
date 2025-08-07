@@ -1,13 +1,21 @@
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal
 from typing import Dict, List, Optional
 from uuid import UUID, uuid4
 import logging
 
 from .order import Order
-
-# TODO: Import value objects when created
-# from ..value_objects import Money, Symbol, Quantity, OrderType
+from ..events.portfolio_events import (
+    PortfolioCreated,
+    FundsReserved,
+    FundsReleased,
+    PositionOpened,
+    PositionClosed,
+    PositionUpdated,
+    OrderPlacedFromPortfolio,
+    OrderFilledInPortfolio
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +53,15 @@ class Portfolio:
             currency=currency
         )
         
-        # TODO: Record domain event
-        # portfolio._add_event(PortfolioCreated(portfolio_id, name, initial_cash))
-        portfolio._add_event(f"PortfolioCreated: {portfolio_id}")
+        # Record domain event
+        event = PortfolioCreated(
+            portfolio_id=portfolio_id,
+            name=name,
+            initial_cash=initial_cash,
+            currency=currency,
+            occurred_at=datetime.utcnow()
+        )
+        portfolio._add_event(event)
         
         return portfolio
     
@@ -78,9 +92,15 @@ class Portfolio:
         self.available_cash -= amount
         self.reserved_cash += amount
         
-        # TODO: Record domain event
-        # self._add_event(FundsReserved(self.id, amount))
-        self._add_event(f"FundsReserved: {amount}")
+        # Record domain event
+        event = FundsReserved(
+            portfolio_id=self.id,
+            amount=amount,
+            order_id=UUID(int=0),  # Will be updated when order is created
+            reason="Order placement",
+            occurred_at=datetime.utcnow()
+        )
+        self._add_event(event)
     
     def release_reserved_funds(self, amount: Decimal) -> None:
         """
@@ -98,9 +118,15 @@ class Portfolio:
         self.reserved_cash -= amount
         self.available_cash += amount
         
-        # TODO: Record domain event
-        # self._add_event(FundsReleased(self.id, amount))
-        self._add_event(f"FundsReleased: {amount}")
+        # Record domain event
+        event = FundsReleased(
+            portfolio_id=self.id,
+            amount=amount,
+            order_id=None,
+            reason="Order cancelled or funds released",
+            occurred_at=datetime.utcnow()
+        )
+        self._add_event(event)
     
     def place_order(self, 
                    symbol: str,           # TODO: Symbol
@@ -144,9 +170,17 @@ class Portfolio:
             price=price
         )
         
-        # TODO: Record domain event
-        # self._add_event(OrderPlacedFromPortfolio(self.id, order.id, required_funds))
-        self._add_event(f"OrderPlacedFromPortfolio: {order.id}")
+        # Record domain event
+        event = OrderPlacedFromPortfolio(
+            portfolio_id=self.id,
+            order_id=order.id,
+            symbol=symbol,
+            quantity=quantity,
+            order_type=order_type,
+            reserved_funds=required_funds,
+            occurred_at=datetime.utcnow()
+        )
+        self._add_event(event)
         
         return order
     
@@ -160,9 +194,18 @@ class Portfolio:
         else:
             self.positions[symbol] = quantity
         
-        # TODO: Record domain event
-        # self._add_event(PositionAdded(self.id, symbol, quantity))
-        self._add_event(f"PositionAdded: {symbol} x {quantity}")
+        # Record domain event
+        old_quantity = self.positions.get(symbol, 0)
+        event = PositionUpdated(
+            portfolio_id=self.id,
+            symbol=symbol,
+            old_quantity=old_quantity,
+            new_quantity=old_quantity + quantity,
+            price=Decimal("0"),  # Will be set by caller with actual price
+            order_id=UUID(int=0),  # Will be set by caller
+            occurred_at=datetime.utcnow()
+        )
+        self._add_event(event)
     
     def get_position(self, symbol: str) -> int:
         """Get current position for a symbol"""
@@ -210,7 +253,17 @@ class Portfolio:
             self.available_cash -= actual_cost
             
             # Record event
-            self._add_event(f"OrderFilled: {order_id}, Cost: {actual_cost}")
+            event = OrderFilledInPortfolio(
+                portfolio_id=self.id,
+                order_id=order_id,
+                symbol=symbol,
+                quantity=quantity,
+                fill_price=fill_price,
+                actual_cost=actual_cost,
+                commission=Decimal("0"),  # TODO: Add commission tracking
+                occurred_at=datetime.utcnow()
+            )
+            self._add_event(event)
             
             logger.info(
                 f"Portfolio {self.id}: Order filled for {quantity} {symbol} @ {fill_price}. "
