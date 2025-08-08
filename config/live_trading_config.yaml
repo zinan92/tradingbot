@@ -1,0 +1,241 @@
+# Live Trading Configuration
+# IMPORTANT: Keep API credentials secure and never commit to version control
+
+# Trading Mode
+mode:
+  environment: "testnet"  # Start with testnet, change to "production" when ready
+  dry_run: true  # Set to false to execute real trades
+  paper_trading_days: 7  # Days to paper trade before live
+
+# Binance API Configuration
+binance:
+  testnet:
+    api_key: "YOUR_TESTNET_API_KEY"  # Get from https://testnet.binancefuture.com/
+    api_secret: "YOUR_TESTNET_API_SECRET"
+    base_url: "https://testnet.binancefuture.com"
+    ws_url: "wss://stream.binancefuture.com"
+  
+  production:
+    api_key: "YOUR_PRODUCTION_API_KEY"  # Get from https://www.binance.com/en/my/settings/api-management
+    api_secret: "YOUR_PRODUCTION_API_SECRET"
+    base_url: "https://fapi.binance.com"
+    ws_url: "wss://fstream.binance.com"
+
+# Strategy Configuration
+strategy:
+  # Grid Trading Strategy (Best performing from backtests)
+  grid:
+    enabled: true
+    # Symbols to trade with grid strategy
+    symbols:
+      - symbol: "BNBUSDT"
+        interval: "1h"
+        grid_levels: 10
+        grid_spacing: 0.005  # 0.5% spacing
+        position_size_per_grid: 0.05  # 5% per grid level
+      # Can add more symbols here:
+      # - symbol: "BTCUSDT"
+      #   interval: "5m"
+      #   grid_levels: 20
+      #   grid_spacing: 0.003
+      #   position_size_per_grid: 0.02
+    
+    # Common grid settings for all symbols
+    use_dynamic_grid: true
+    atr_period: 14
+    atr_multiplier: 1.5
+    sma_period: 20
+    
+  # Momentum Trading Strategy
+  momentum:
+    enabled: false
+    # Symbols to trade with momentum strategy
+    symbols:
+      - symbol: "LINKUSDT"
+        interval: "2h"
+        position_size: 0.95
+      # Can add more symbols here:
+      # - symbol: "ETHUSDT"
+      #   interval: "1h"
+      #   position_size: 0.50
+    
+    # Common momentum settings for all symbols
+    fast_period: 8
+    slow_period: 21
+    stop_loss_pct: 0.03
+    take_profit_pct: 0.10
+    
+  # Mean Reversion Strategy (placeholder for future)
+  mean_reversion:
+    enabled: false
+    symbols: []
+    
+  # EMA Cross Strategy (placeholder for future)
+  ema_cross:
+    enabled: false
+    symbols: []
+
+# Capital Management
+capital:
+  initial_capital: 500  # Start small ($500)
+  currency: "USDT"
+  
+  # Capital allocation per strategy
+  allocation:
+    grid: 1.0  # 100% to Grid strategy
+    momentum: 0.0  # 0% to Momentum (disabled)
+    mean_reversion: 0.0  # 0% to Mean Reversion (disabled)
+    ema_cross: 0.0  # 0% to EMA Cross (disabled)
+
+# Risk Management
+risk_management:
+  # Position limits
+  max_position_size_pct: 0.10  # Max 10% per position
+  max_total_exposure_pct: 0.95  # Max 95% total exposure
+  max_positions: 10  # Maximum concurrent positions
+  
+  # Loss limits
+  max_daily_loss_pct: 0.02  # Max 2% daily loss
+  max_drawdown_pct: 0.10  # Max 10% drawdown
+  emergency_stop_loss_pct: 0.15  # Emergency stop at 15% loss
+  
+  # Margin and leverage
+  min_free_margin_pct: 0.20  # Keep 20% free margin
+  max_leverage: 2.0  # Max 2x leverage (conservative)
+  
+  # Correlation limits
+  max_correlation: 0.7  # Max correlation between positions
+
+# Order Execution
+order_execution:
+  max_retries: 3
+  retry_delay: 1.0  # seconds
+  min_order_size_usdt: 10  # Minimum $10 order
+  
+  # Slippage tolerance
+  market_order_slippage: 0.001  # 0.1% slippage
+  limit_order_timeout: 60  # Cancel unfilled limit orders after 60 seconds
+
+# Monitoring & Alerts
+monitoring:
+  # Health checks
+  health_check_interval: 60  # seconds
+  max_latency_ms: 1000  # Alert if latency > 1 second
+  
+  # Performance alerts
+  alert_on_daily_loss: true
+  alert_on_drawdown: true
+  alert_on_emergency_stop: true
+  
+  # Notification channels
+  notifications:
+    telegram:
+      enabled: false
+      bot_token: "YOUR_TELEGRAM_BOT_TOKEN"
+      chat_id: "YOUR_CHAT_ID"
+    
+    email:
+      enabled: false
+      smtp_server: "smtp.gmail.com"
+      smtp_port: 587
+      sender_email: "your_email@gmail.com"
+      sender_password: "YOUR_APP_PASSWORD"
+      recipient_email: "alert@example.com"
+    
+    webhook:
+      enabled: false
+      url: "https://your-webhook-url.com/alerts"
+
+# Data Management
+data:
+  # Database connection
+  database:
+    host: "localhost"
+    port: 5432
+    name: "tradingbot"
+    user: null  # Uses current user
+    password: null
+  
+  # Data retention
+  keep_kline_days: 90  # Keep 90 days of kline data
+  keep_trades_days: 365  # Keep 1 year of trade history
+  
+  # Backup
+  backup_enabled: true
+  backup_interval: "daily"
+  backup_path: "/Users/park/tradingbot_backups"
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file_path: "/Users/park/tradingbot_v2/logs/live_trading.log"
+  max_file_size_mb: 100
+  backup_count: 10
+  
+  # Separate logs for different components
+  trade_log: "/Users/park/tradingbot_v2/logs/trades.log"
+  error_log: "/Users/park/tradingbot_v2/logs/errors.log"
+  performance_log: "/Users/park/tradingbot_v2/logs/performance.log"
+
+# Safety Features
+safety:
+  # Trading hours (UTC)
+  trading_hours:
+    enabled: false  # Trade 24/7 for crypto
+    start_hour: 0
+    end_hour: 24
+  
+  # Maintenance mode
+  maintenance_mode: false
+  
+  # Kill switch
+  kill_switch:
+    enabled: true
+    trigger_on_connection_loss: true
+    trigger_on_data_delay: true
+    max_data_delay_seconds: 300  # 5 minutes
+  
+  # Gradual scaling
+  scaling:
+    enabled: true
+    start_with_min_size: true
+    increase_after_profitable_days: 3
+    scale_factor: 1.5  # Increase by 50% each time
+    max_scale_steps: 3  # Max 3 scaling steps
+
+# Performance Tracking
+performance:
+  # Metrics to track
+  track_sharpe_ratio: true
+  track_sortino_ratio: true
+  track_calmar_ratio: true
+  track_win_rate: true
+  track_profit_factor: true
+  
+  # Reporting
+  daily_report: true
+  weekly_report: true
+  monthly_report: true
+  
+  # Report destination
+  report_path: "/Users/park/tradingbot_v2/reports"
+  
+# System Requirements
+system:
+  # Minimum requirements
+  min_free_memory_mb: 500
+  min_free_disk_gb: 1
+  
+  # Auto-restart
+  auto_restart_on_error: true
+  max_restart_attempts: 3
+  restart_delay_seconds: 60
+
+# IMPORTANT REMINDERS:
+# 1. NEVER commit this file with real API keys
+# 2. Start with TESTNET mode first
+# 3. Use small capital initially ($100-500)
+# 4. Monitor closely for the first week
+# 5. Keep emergency stop loss enabled
+# 6. Review logs daily
+# 7. Have a plan to manually intervene if needed

@@ -30,13 +30,12 @@ class DataAdapter:
             connection_params: PostgreSQL connection parameters
                               If None, uses default local connection
         """
-        self.connection_params = connection_params or {
-            'host': 'localhost',
-            'port': 5432,
-            'database': 'tradingbot',
-            'user': 'postgres',
-            'password': 'postgres'
-        }
+        self.connection_params = connection_params
+        # If params provided but incomplete, fill defaults
+        if self.connection_params:
+            self.connection_params.setdefault('host', 'localhost')
+            self.connection_params.setdefault('port', 5432)
+            self.connection_params.setdefault('database', 'tradingbot')
     
     def fetch_ohlcv(self, 
                     symbol: str, 
@@ -57,13 +56,15 @@ class DataAdapter:
             Index: DatetimeIndex
         """
         try:
-            # For development/testing, create sample data if DB not available
-            # In production, this would connect to actual PostgreSQL
             logger.info(f"Fetching {symbol} data from {start_date} to {end_date}")
             
-            # Generate sample data for testing
-            # In production, replace with actual PostgreSQL query
-            df = self._generate_sample_data(symbol, start_date, end_date, interval)
+            # Use real database data if connection params provided
+            if self.connection_params:
+                df = self.fetch_from_database(symbol, start_date, end_date, interval)
+            else:
+                # Fall back to sample data only if no connection params
+                logger.warning("No database connection params, using sample data")
+                df = self._generate_sample_data(symbol, start_date, end_date, interval)
             
             # Ensure correct column names for backtesting.py
             df = df.rename(columns={
@@ -98,12 +99,12 @@ class DataAdapter:
         query = """
         SELECT 
             open_time as timestamp,
-            open,
-            high,
-            low,
-            close,
+            open_price as open,
+            high_price as high,
+            low_price as low,
+            close_price as close,
             volume
-        FROM market_klines
+        FROM kline_data
         WHERE symbol = %s
           AND interval = %s
           AND open_time >= %s
@@ -112,7 +113,9 @@ class DataAdapter:
         """
         
         try:
-            with psycopg2.connect(**self.connection_params) as conn:
+            # Filter out None values from connection params
+            conn_params = {k: v for k, v in self.connection_params.items() if v is not None}
+            with psycopg2.connect(**conn_params) as conn:
                 df = pd.read_sql_query(
                     query,
                     conn,

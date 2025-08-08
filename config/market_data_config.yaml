@@ -1,0 +1,102 @@
+# Market Data Configuration
+# This file configures which symbols to track and how to manage market data
+
+symbols:
+  # Core cryptocurrencies
+  - BTCUSDT
+  - ETHUSDT
+  - SOLUSDT
+  
+  # Major altcoins
+  - XRPUSDT
+  - DOGEUSDT
+  - BNBUSDT
+  - ADAUSDT
+  - LTCUSDT
+  - LINKUSDT
+  - AVAXUSDT
+  - BCHUSDT
+  
+  # New generation tokens
+  - SUIUSDT
+  - ENAUSDT
+  
+  # Meme coins
+  - 1000PEPEUSDT
+  - WIFUSDT
+  - FARTCOINUSDT
+  - 1000BONKUSDT
+  - 1000SHIBUSDT
+  
+  # DeFi tokens  
+  - AAVEUSDT
+  - JUPUSDT
+  - JTOUSDT
+  - UNIUSDT
+  - SUSHIUSDT
+  - CRVUSDT
+  - LDOUSDT
+  - PENDLEUSDT
+  - ONDOUSDT
+
+# Timeframe intervals for kline data
+intervals:
+  - 5m
+  - 15m
+  - 30m
+  - 1h
+  - 2h
+  - 4h
+  - 1d
+
+# Historical data configuration
+historical:
+  days_back: 1095  # 3 years of data
+  batch_size: 1000  # Klines per request
+  parallel_workers: 4  # Concurrent download workers
+  
+# Live streaming configuration
+live:
+  auto_reconnect: true
+  reconnect_delay: 5  # seconds
+  max_reconnect_attempts: 10
+  store_to_db: true
+  publish_events: true
+  
+# Rate limiting configuration
+rate_limits:
+  max_requests_per_minute: 1200  # Binance limit
+  request_weight: 1
+  
+# Indicator configuration
+indicators:
+  enabled: true
+  calculate_on_close: true  # Only calculate when candle closes
+  intervals_to_calculate:
+    - 5m
+    - 15m
+    - 1h
+    - 4h
+    - 1d
+  list:
+    - name: RSI
+      period: 14
+    - name: MACD
+      fast: 12
+      slow: 26
+      signal: 9
+    - name: ATR
+      period: 14
+    - name: EMA
+      periods: [12, 50, 200]
+
+# Database configuration
+database:
+  batch_insert_size: 1000
+  cleanup_old_data_days: 0  # 0 = keep all data
+  
+# Monitoring configuration  
+monitoring:
+  log_level: INFO
+  stats_interval: 300  # Log stats every 5 minutes
+  health_check_interval: 60  # Check connection health every minute

@@ -1,0 +1,26 @@
+# Dashboard Requirements
+# Install with: pip install -r dashboard/requirements.txt
+
+# Core Dependencies
+streamlit==1.29.0
+plotly==5.18.0
+pandas==2.1.3
+numpy==1.24.3
+
+# Database
+psycopg2-binary==2.9.9
+
+# API Communication
+requests==2.31.0
+
+# Configuration
+pyyaml==6.0.1
+
+# Data Processing
+python-dateutil==2.8.2
+
+# Optional - for better performance
+pyarrow==14.0.1
+
+# Development (optional)
+watchdog==3.0.0  # For auto-reload during development
