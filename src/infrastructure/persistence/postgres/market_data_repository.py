@@ -1,7 +1,9 @@
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, desc, func
+from sqlalchemy import and_, desc, func, asc
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import IntegrityError
 import json
 import logging
 
@@ -70,6 +72,162 @@ class MarketDataRepository:
                 KlineData.interval == interval
             )
         ).order_by(desc(KlineData.open_time)).first()
+    
+    def get_earliest_kline(self, symbol: str, interval: str) -> Optional[KlineData]:
+        """Get the earliest kline for a symbol/interval combination"""
+        return self.session.query(KlineData).filter(
+            and_(
+                KlineData.symbol == symbol,
+                KlineData.interval == interval
+            )
+        ).order_by(asc(KlineData.open_time)).first()
+    
+    def get_kline_by_time(self, symbol: str, interval: str, open_time: datetime) -> Optional[KlineData]:
+        """Get a specific kline by its open time"""
+        return self.session.query(KlineData).filter(
+            and_(
+                KlineData.symbol == symbol,
+                KlineData.interval == interval,
+                KlineData.open_time == open_time
+            )
+        ).first()
+    
+    def count_klines(self, 
+                     symbol: str, 
+                     interval: str,
+                     start_time: Optional[datetime] = None,
+                     end_time: Optional[datetime] = None) -> int:
+        """Count the number of klines in a given time range"""
+        query = self.session.query(func.count(KlineData.id)).filter(
+            and_(
+                KlineData.symbol == symbol,
+                KlineData.interval == interval
+            )
+        )
+        
+        if start_time:
+            query = query.filter(KlineData.open_time >= start_time)
+        if end_time:
+            query = query.filter(KlineData.open_time <= end_time)
+        
+        return query.scalar() or 0
+    
+    def bulk_save_klines(self, klines: List[Dict[str, Any]], batch_size: int = 1000) -> int:
+        """
+        Bulk save klines with efficient upsert operation
+        
+        Args:
+            klines: List of kline dictionaries
+            batch_size: Number of records to insert at once
+            
+        Returns:
+            Number of records inserted/updated
+        """
+        if not klines:
+            return 0
+        
+        total_saved = 0
+        
+        try:
+            for i in range(0, len(klines), batch_size):
+                batch = klines[i:i + batch_size]
+                
+                # Prepare data for bulk insert
+                stmt = insert(KlineData).values(batch)
+                
+                # On conflict, update the existing record
+                stmt = stmt.on_conflict_do_update(
+                    constraint='unique_kline',
+                    set_={
+                        'high_price': stmt.excluded.high_price,
+                        'low_price': stmt.excluded.low_price,
+                        'close_price': stmt.excluded.close_price,
+                        'volume': stmt.excluded.volume,
+                        'quote_volume': stmt.excluded.quote_volume,
+                        'number_of_trades': stmt.excluded.number_of_trades,
+                        'taker_buy_base_volume': stmt.excluded.taker_buy_base_volume,
+                        'taker_buy_quote_volume': stmt.excluded.taker_buy_quote_volume
+                    }
+                )
+                
+                self.session.execute(stmt)
+                total_saved += len(batch)
+            
+            self.session.commit()
+            logger.debug(f"Bulk saved {total_saved} klines")
+            return total_saved
+            
+        except Exception as e:
+            self.session.rollback()
+            logger.error(f"Error bulk saving klines: {e}")
+            raise
+    
+    def get_data_gaps(self, 
+                      symbol: str, 
+                      interval: str,
+                      start_time: datetime,
+                      end_time: datetime) -> List[Tuple[datetime, datetime]]:
+        """
+        Find gaps in kline data for a given time range
+        
+        Args:
+            symbol: Trading symbol
+            interval: Time interval
+            start_time: Start of the range to check
+            end_time: End of the range to check
+            
+        Returns:
+            List of (gap_start, gap_end) tuples representing missing data ranges
+        """
+        klines = self.get_klines(symbol, interval, start_time, end_time, limit=100000)
+        
+        if not klines:
+            return [(start_time, end_time)]
+        
+        # Sort klines by open time
+        klines.sort(key=lambda k: k.open_time)
+        
+        gaps = []
+        
+        # Check for gap at the beginning
+        if klines[0].open_time > start_time:
+            gaps.append((start_time, klines[0].open_time))
+        
+        # Check for gaps between klines
+        expected_duration = self._get_interval_duration(interval)
+        for i in range(len(klines) - 1):
+            expected_next = klines[i].close_time + timedelta(milliseconds=1)
+            actual_next = klines[i + 1].open_time
+            
+            if actual_next > expected_next + expected_duration:
+                gaps.append((expected_next, actual_next))
+        
+        # Check for gap at the end
+        if klines[-1].close_time < end_time:
+            gaps.append((klines[-1].close_time, end_time))
+        
+        return gaps
+    
+    def _get_interval_duration(self, interval: str) -> timedelta:
+        """Convert interval string to timedelta"""
+        interval_map = {
+            '1m': timedelta(minutes=1),
+            '3m': timedelta(minutes=3),
+            '5m': timedelta(minutes=5),
+            '15m': timedelta(minutes=15),
+            '30m': timedelta(minutes=30),
+            '1h': timedelta(hours=1),
+            '2h': timedelta(hours=2),
+            '4h': timedelta(hours=4),
+            '6h': timedelta(hours=6),
+            '8h': timedelta(hours=8),
+            '12h': timedelta(hours=12),
+            '1d': timedelta(days=1),
+            '3d': timedelta(days=3),
+            '1w': timedelta(weeks=1),
+            '1M': timedelta(days=30)  # Approximate
+        }
+        return interval_map.get(interval, timedelta(minutes=1))
     
     # Order Book Methods
     def save_orderbook_snapshot(self, orderbook_data: Dict[str, Any]) -> OrderBookSnapshot:

@@ -6,6 +6,11 @@ from uuid import UUID, uuid4
 import logging
 
 from .order import Order
+from ..entities.position import Position
+from ..value_objects.leverage import Leverage
+from ..value_objects.price import Price
+from ..value_objects.quantity import Quantity
+from ..value_objects.side import PositionSide
 from ..events.portfolio_events import (
     PortfolioCreated,
     FundsReserved,
@@ -32,8 +37,22 @@ class Portfolio:
     name: str
     available_cash: Decimal  # TODO: Replace with Money value object
     reserved_cash: Decimal = field(default_factory=lambda: Decimal("0"))
-    currency: str = "USD"
-    positions: Dict[str, int] = field(default_factory=dict)  # symbol -> quantity
+    currency: str = "USDT"  # Default to USDT for futures
+    
+    # Spot positions (symbol -> quantity)
+    spot_positions: Dict[str, int] = field(default_factory=dict)
+    
+    # Futures positions (symbol -> Position entity)
+    futures_positions: Dict[str, Position] = field(default_factory=dict)
+    
+    # Margin tracking for futures
+    initial_margin: Decimal = field(default_factory=lambda: Decimal("0"))
+    maintenance_margin: Decimal = field(default_factory=lambda: Decimal("0"))
+    margin_ratio: Decimal = field(default_factory=lambda: Decimal("0"))
+    
+    # Risk limits
+    max_leverage: int = 20  # Maximum allowed leverage
+    max_position_size: Decimal = field(default_factory=lambda: Decimal("100000"))  # Max position value in USDT
     
     # Event sourcing support
     _events: List = field(default_factory=list, init=False)
@@ -185,17 +204,17 @@ class Portfolio:
         return order
     
     def add_position(self, symbol: str, quantity: int) -> None:
-        """Add or update a position when an order is filled"""
+        """Add or update a spot position when an order is filled"""
         if quantity <= 0:
             raise InvalidAmountError("Position quantity must be positive")
         
-        if symbol in self.positions:
-            self.positions[symbol] += quantity
+        if symbol in self.spot_positions:
+            self.spot_positions[symbol] += quantity
         else:
-            self.positions[symbol] = quantity
+            self.spot_positions[symbol] = quantity
         
         # Record domain event
-        old_quantity = self.positions.get(symbol, 0)
+        old_quantity = self.spot_positions.get(symbol, 0)
         event = PositionUpdated(
             portfolio_id=self.id,
             symbol=symbol,
@@ -208,8 +227,8 @@ class Portfolio:
         self._add_event(event)
     
     def get_position(self, symbol: str) -> int:
-        """Get current position for a symbol"""
-        return self.positions.get(symbol, 0)
+        """Get current spot position for a symbol"""
+        return self.spot_positions.get(symbol, 0)
     
     def complete_order_fill(self, 
                            symbol: str,
@@ -270,14 +289,274 @@ class Portfolio:
                 f"Cost: {actual_cost}, Available cash: {self.available_cash}"
             )
     
+    def open_futures_position(
+        self,
+        symbol: str,
+        side: PositionSide,
+        quantity: int,
+        entry_price: Decimal,
+        leverage: int = 1
+    ) -> Position:
+        """
+        Open a new futures position.
+        
+        Args:
+            symbol: Trading symbol
+            side: LONG or SHORT
+            quantity: Position size
+            entry_price: Entry price
+            leverage: Leverage to use
+            
+        Returns:
+            Position entity
+            
+        Raises:
+            InsufficientFundsError: If insufficient margin
+        """
+        # Create value objects
+        qty_vo = Quantity(quantity)
+        price_vo = Price(entry_price)
+        leverage_vo = Leverage(leverage)
+        
+        # Check if position already exists
+        if symbol in self.futures_positions and self.futures_positions[symbol].is_open:
+            raise InvalidOrderError(f"Position already exists for {symbol}")
+        
+        # Calculate required margin
+        position_value = entry_price * Decimal(str(quantity))
+        required_margin = leverage_vo.calculate_initial_margin(position_value)
+        
+        # Check available funds
+        if not self.check_sufficient_funds(required_margin):
+            raise InsufficientFundsError(
+                f"Insufficient margin. Required: {required_margin} {self.currency}, "
+                f"Available: {self.available_cash} {self.currency}"
+            )
+        
+        # Reserve margin
+        self.reserve_funds(required_margin)
+        
+        # Create position
+        position = Position.open_position(
+            symbol=symbol,
+            side=side,
+            quantity=qty_vo,
+            entry_price=price_vo,
+            leverage=leverage_vo,
+            portfolio_id=self.id
+        )
+        
+        # Store position
+        self.futures_positions[symbol] = position
+        
+        # Update margin totals
+        self.initial_margin += required_margin
+        self._update_margin_ratio()
+        
+        # Record event
+        event = PositionOpened(
+            portfolio_id=self.id,
+            position_id=position.id,
+            symbol=symbol,
+            side=side.value,
+            quantity=quantity,
+            entry_price=entry_price,
+            leverage=leverage,
+            margin_used=required_margin,
+            occurred_at=datetime.utcnow()
+        )
+        self._add_event(event)
+        
+        return position
+    
+    def close_futures_position(
+        self,
+        symbol: str,
+        close_price: Decimal
+    ) -> Decimal:
+        """
+        Close a futures position.
+        
+        Args:
+            symbol: Trading symbol
+            close_price: Closing price
+            
+        Returns:
+            Realized PnL
+        """
+        if symbol not in self.futures_positions:
+            raise InvalidOrderError(f"No position found for {symbol}")
+        
+        position = self.futures_positions[symbol]
+        if not position.is_open:
+            raise InvalidOrderError(f"Position for {symbol} is already closed")
+        
+        # Close position and get PnL
+        close_price_vo = Price(close_price)
+        realized_pnl = position.close_position(close_price_vo)
+        
+        # Release margin
+        self.release_reserved_funds(position.initial_margin)
+        self.initial_margin -= position.initial_margin
+        
+        # Add PnL to available cash
+        self.available_cash += realized_pnl
+        
+        # Update margin ratio
+        self._update_margin_ratio()
+        
+        # Record event
+        event = PositionClosed(
+            portfolio_id=self.id,
+            position_id=position.id,
+            symbol=symbol,
+            close_price=close_price,
+            realized_pnl=realized_pnl,
+            occurred_at=datetime.utcnow()
+        )
+        self._add_event(event)
+        
+        logger.info(
+            f"Portfolio {self.id}: Closed {symbol} position. "
+            f"PnL: {realized_pnl} {self.currency}"
+        )
+        
+        return realized_pnl
+    
+    def update_position_prices(self, price_updates: Dict[str, Decimal]) -> None:
+        """
+        Update mark prices for all positions.
+        
+        Args:
+            price_updates: Dictionary of symbol to new price
+        """
+        total_unrealized_pnl = Decimal("0")
+        
+        for symbol, price in price_updates.items():
+            if symbol in self.futures_positions:
+                position = self.futures_positions[symbol]
+                if position.is_open:
+                    price_vo = Price(price)
+                    position.update_mark_price(price_vo)
+                    total_unrealized_pnl += position.unrealized_pnl
+        
+        # Update margin ratio based on new prices
+        self._update_margin_ratio()
+        
+        # Check for margin calls
+        if self._is_margin_call():
+            # TODO: Emit MarginCall event
+            logger.warning(f"MARGIN CALL for portfolio {self.id}! Margin ratio: {self.margin_ratio}")
+    
+    def _update_margin_ratio(self) -> None:
+        """Update portfolio margin ratio based on all positions."""
+        if self.initial_margin == 0:
+            self.margin_ratio = Decimal("1")
+            return
+        
+        # Calculate total unrealized PnL
+        total_unrealized = sum(
+            pos.unrealized_pnl for pos in self.futures_positions.values()
+            if pos.is_open
+        )
+        
+        # Margin ratio = (Initial Margin + Unrealized PnL) / Initial Margin
+        available_margin = self.initial_margin + total_unrealized
+        self.margin_ratio = available_margin / self.initial_margin
+    
+    def _is_margin_call(self, threshold: Decimal = Decimal("0.5")) -> bool:
+        """
+        Check if portfolio is in margin call.
+        
+        Args:
+            threshold: Margin ratio threshold (default 50%)
+            
+        Returns:
+            True if margin call
+        """
+        return self.margin_ratio < threshold
+    
+    def get_total_exposure(self) -> Decimal:
+        """Calculate total portfolio exposure across all positions."""
+        total = Decimal("0")
+        
+        for position in self.futures_positions.values():
+            if position.is_open:
+                position_value = position.mark_price.value * Decimal(str(position.quantity.value))
+                total += position_value
+        
+        return total
+    
+    def get_leverage_utilization(self) -> Decimal:
+        """Calculate how much of available leverage is being used."""
+        total_exposure = self.get_total_exposure()
+        total_capital = self.available_cash + self.initial_margin
+        
+        if total_capital == 0:
+            return Decimal("0")
+        
+        return total_exposure / total_capital
+    
+    def can_open_position(
+        self,
+        symbol: str,
+        quantity: int,
+        price: Decimal,
+        leverage: int
+    ) -> bool:
+        """
+        Check if portfolio can open a new position.
+        
+        Args:
+            symbol: Trading symbol
+            quantity: Position size
+            price: Entry price
+            leverage: Desired leverage
+            
+        Returns:
+            True if position can be opened
+        """
+        # Check leverage limit
+        if leverage > self.max_leverage:
+            return False
+        
+        # Calculate required margin
+        position_value = price * Decimal(str(quantity))
+        leverage_vo = Leverage(leverage)
+        required_margin = leverage_vo.calculate_initial_margin(position_value)
+        
+        # Check available funds
+        if not self.check_sufficient_funds(required_margin):
+            return False
+        
+        # Check position size limit
+        if position_value > self.max_position_size:
+            return False
+        
+        # Check if it would cause excessive leverage
+        new_exposure = self.get_total_exposure() + position_value
+        total_capital = self.available_cash + self.initial_margin
+        
+        if total_capital > 0:
+            new_leverage_ratio = new_exposure / total_capital
+            if new_leverage_ratio > self.max_leverage:
+                return False
+        
+        return True
+    
     def get_total_value(self) -> Decimal:
         """
-        Calculate total portfolio value
-        TODO: Implement with market prices
+        Calculate total portfolio value including positions.
         """
-        # This would need market prices to calculate properly
-        # For now, return cash only
-        return self.available_cash + self.reserved_cash
+        # Cash + reserved + unrealized PnL
+        total = self.available_cash + self.reserved_cash
+        
+        # Add unrealized PnL from futures
+        for position in self.futures_positions.values():
+            if position.is_open:
+                total += position.unrealized_pnl
+        
+        return total
     
     def pull_events(self) -> List:
         """Return and clear domain events"""

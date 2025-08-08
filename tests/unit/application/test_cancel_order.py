@@ -97,15 +97,17 @@ class TestCancelOrderCommandHandler:
         
         # Create a sample order for testing
         self.order_id = uuid4()
-        self.sample_order = Order(
-            id=self.order_id,
+        # Use the factory method to create the order
+        self.sample_order = Order.create(
             symbol="AAPL",
             quantity=100,
             order_type="MARKET",
-            price=150.0,
-            status=OrderStatus.PENDING,
-            broker_order_id="BROKER123"
+            side="BUY",
+            price=150.0
         )
+        # Override some attributes for testing
+        self.sample_order.id = self.order_id
+        self.sample_order.broker_order_id = "BROKER123"
     
     def test_cancel_pending_order_success(self):
         """Test 1: Successfully cancel a pending order"""
@@ -159,16 +161,17 @@ class TestCancelOrderCommandHandler:
     def test_cancel_filled_order_fails(self):
         """Test 2: Cannot cancel an already filled order"""
         # Arrange
-        filled_order = Order(
-            id=self.order_id,
+        filled_order = Order.create(
             symbol="AAPL",
             quantity=100,
             order_type="MARKET",
-            price=150.0,
-            status=OrderStatus.FILLED,
-            filled_at=datetime.utcnow(),
-            broker_order_id="BROKER123"
+            side="BUY",
+            price=150.0
         )
+        filled_order.id = self.order_id
+        filled_order.status = OrderStatus.FILLED
+        filled_order.filled_at = datetime.utcnow()
+        filled_order.broker_order_id = "BROKER123"
         self.order_repo.add_order(filled_order)
         command = CancelOrderCommand(order_id=self.order_id)
         
@@ -191,17 +194,18 @@ class TestCancelOrderCommandHandler:
     def test_cancel_already_cancelled_order_fails(self):
         """Test 3: Cannot cancel an already cancelled order"""
         # Arrange
-        cancelled_order = Order(
-            id=self.order_id,
+        cancelled_order = Order.create(
             symbol="AAPL",
             quantity=100,
             order_type="MARKET",
-            price=150.0,
-            status=OrderStatus.CANCELLED,
-            cancelled_at=datetime.utcnow(),
-            cancellation_reason="Previous cancellation",
-            broker_order_id="BROKER123"
+            side="BUY",
+            price=150.0
         )
+        cancelled_order.id = self.order_id
+        cancelled_order.status = OrderStatus.CANCELLED
+        cancelled_order.cancelled_at = datetime.utcnow()
+        cancelled_order.cancellation_reason = "Previous cancellation"
+        cancelled_order.broker_order_id = "BROKER123"
         self.order_repo.add_order(cancelled_order)
         command = CancelOrderCommand(order_id=self.order_id)
         
@@ -316,15 +320,15 @@ class TestCancelOrderCommandHandler:
     def test_cancel_order_without_broker_id(self):
         """Test cancelling an order that has no broker_order_id"""
         # Arrange
-        order_without_broker_id = Order(
-            id=self.order_id,
+        order_without_broker_id = Order.create(
             symbol="AAPL",
             quantity=100,
             order_type="MARKET",
-            price=150.0,
-            status=OrderStatus.PENDING,
-            broker_order_id=None  # No broker ID
+            side="BUY",
+            price=150.0
         )
+        order_without_broker_id.id = self.order_id
+        order_without_broker_id.broker_order_id = None  # No broker ID
         self.order_repo.add_order(order_without_broker_id)
         command = CancelOrderCommand(order_id=self.order_id)
         

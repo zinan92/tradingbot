@@ -142,6 +142,7 @@ class TestOrderFilledEventHandler:
         )
         
         portfolio_with_funds = Mock(spec=Portfolio)
+        portfolio_with_funds.id = self.portfolio_id
         portfolio_with_funds.reserved_cash = Decimal("1500.00")
         portfolio_with_funds.add_position = Mock()
         portfolio_with_funds.complete_order_fill = Mock()
@@ -149,6 +150,7 @@ class TestOrderFilledEventHandler:
         portfolio_with_funds.available_cash = Decimal("8500.00")
         
         portfolio_without_funds = Mock(spec=Portfolio)
+        portfolio_without_funds.id = uuid4()
         portfolio_without_funds.reserved_cash = Decimal("0")
         
         self.order_repo.get.return_value = self.test_order

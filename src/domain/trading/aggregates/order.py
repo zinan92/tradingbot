@@ -9,7 +9,8 @@ from ..value_objects.symbol import Symbol
 from ..value_objects.quantity import Quantity
 from ..value_objects.price import Price
 from ..value_objects.order_type import OrderType
-from ..value_objects.side import Side
+from ..value_objects.side import OrderSideEnum, PositionSide
+from ..value_objects.leverage import Leverage
 
 from ..events import OrderPlaced, OrderCancelled, OrderFilled
 
@@ -34,7 +35,7 @@ class Order:
     symbol: Symbol          # Value object for symbol
     quantity: Quantity      # Value object for quantity
     order_type: OrderType   # Value object for order type
-    side: Side             # Value object for buy/sell side
+    side: OrderSideEnum    # BUY or SELL side
     price: Optional[Price] = None  # Value object for price
     status: OrderStatus = OrderStatus.PENDING
     created_at: datetime = field(default_factory=datetime.utcnow)
@@ -43,6 +44,11 @@ class Order:
     cancellation_reason: Optional[str] = None  # Track reason for cancellation
     broker_order_id: Optional[str] = None
     broker_confirmed_at: Optional[datetime] = None  # When broker confirmed cancellation
+    
+    # Futures-specific fields
+    leverage: Optional[Leverage] = None     # Leverage for futures orders
+    position_side: Optional[PositionSide] = None  # LONG/SHORT for futures
+    reduce_only: bool = False              # Reduce only flag for futures
     
     # Event sourcing support
     _events: List = field(default_factory=list, init=False)
@@ -54,7 +60,10 @@ class Order:
               order_type: str,
               side: str = "BUY",
               price: Optional[float] = None,
-              portfolio_id: Optional[UUID] = None):  # Portfolio that placed the order
+              portfolio_id: Optional[UUID] = None,
+              leverage: Optional[int] = None,
+              position_side: Optional[str] = None,
+              reduce_only: bool = False):  # Portfolio that placed the order
         """Factory method to create a new order with proper value objects"""
         from decimal import Decimal
         
@@ -64,8 +73,10 @@ class Order:
         symbol_vo = Symbol(symbol)
         quantity_vo = Quantity(quantity)
         order_type_vo = OrderType.from_string(order_type)
-        side_vo = Side.from_string(side)
-        price_vo = Price(price, "USD") if price else None
+        side_vo = OrderSideEnum[side.upper()]
+        price_vo = Price(Decimal(str(price))) if price else None
+        leverage_vo = Leverage(leverage) if leverage else None
+        position_side_vo = PositionSide[position_side.upper()] if position_side else None
         
         # Create new order
         order = cls(
@@ -75,7 +86,10 @@ class Order:
             order_type=order_type_vo,
             side=side_vo,
             price=price_vo,
-            status=OrderStatus.PENDING
+            status=OrderStatus.PENDING,
+            leverage=leverage_vo,
+            position_side=position_side_vo,
+            reduce_only=reduce_only
         )
         
         # Create and record domain event with value objects
@@ -85,7 +99,7 @@ class Order:
             symbol=symbol_vo.value,
             quantity=quantity_vo.value,
             order_type=order_type_vo.value,
-            price=price_vo.to_decimal() if price_vo else None
+            price=price_vo.value if price_vo else None
         )
         order._add_event(event)
         
@@ -169,7 +183,7 @@ class Order:
             order_id=self.id,
             symbol=self.symbol.value,
             quantity=self.quantity.value,
-            fill_price=Decimal(str(fill_price or (self.price.to_float() if self.price else 0))),
+            fill_price=Decimal(str(fill_price)) if fill_price else (self.price.value if self.price else Decimal("0")),
             broker_order_id=self.broker_order_id
         )
         self._add_event(event)

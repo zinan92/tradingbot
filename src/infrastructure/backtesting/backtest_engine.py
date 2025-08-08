@@ -132,7 +132,17 @@ class BacktestEngine:
         # Generate HTML chart
         try:
             # Generate the plot without opening browser
-            chart_html = bt.plot(open_browser=False, resample=False)
+            from bokeh.embed import file_html
+            from bokeh.resources import CDN
+            
+            plot_obj = bt.plot(open_browser=False, resample=False)
+            
+            # Convert bokeh plot to HTML string
+            if plot_obj is not None:
+                chart_html = file_html(plot_obj, CDN, "Backtest Results")
+            else:
+                chart_html = "<p>No chart data available</p>"
+                
         except Exception as e:
             logger.warning(f"Failed to generate chart: {str(e)}")
             chart_html = "<p>Chart generation failed</p>"

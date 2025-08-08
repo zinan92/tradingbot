@@ -3,8 +3,7 @@ import json
 import logging
 from typing import Dict, List, Optional, Callable, Any
 from datetime import datetime
-from binance import AsyncClient
-from binance.streams import BinanceSocketManager
+from binance import AsyncClient, BinanceSocketManager
 from binance.enums import FuturesType
 import aiohttp
 

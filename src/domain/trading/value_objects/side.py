@@ -6,6 +6,8 @@ Uses Pydantic v2 for validation and type safety.
 """
 
 from pydantic import BaseModel, Field, field_validator, ConfigDict
+from dataclasses import dataclass
+from decimal import Decimal
 from enum import Enum
 from typing import ClassVar
 
@@ -248,3 +250,75 @@ class PositionSide(Enum):
                 return PositionSide.SHORT  # Selling to open short
         
         raise ValueError(f"Invalid order side: {order_side}")
+
+
+@dataclass(frozen=True)
+class FuturesPosition:
+    """
+    Futures Position Value Object
+    
+    Immutable representation of a futures position with PnL calculation.
+    """
+    symbol: str
+    side: PositionSide
+    quantity: int
+    entry_price: Decimal
+    current_price: Decimal
+    leverage: int = 1
+    
+    def calculate_pnl(self) -> Decimal:
+        """
+        Calculate unrealized PnL for the position.
+        
+        Returns:
+            PnL amount (positive for profit, negative for loss)
+        """
+        price_diff = self.current_price - self.entry_price
+        
+        if self.side == PositionSide.LONG:
+            # Long position: profit when price increases
+            pnl = price_diff * Decimal(str(self.quantity))
+        elif self.side == PositionSide.SHORT:
+            # Short position: profit when price decreases
+            pnl = -price_diff * Decimal(str(self.quantity))
+        else:
+            pnl = Decimal("0")
+        
+        return pnl
+    
+    def calculate_pnl_percentage(self) -> Decimal:
+        """
+        Calculate PnL as percentage of entry value.
+        
+        Returns:
+            PnL percentage (e.g., 0.05 = 5% profit)
+        """
+        if self.entry_price == 0:
+            return Decimal("0")
+        
+        pnl = self.calculate_pnl()
+        entry_value = self.entry_price * Decimal(str(self.quantity))
+        
+        if entry_value == 0:
+            return Decimal("0")
+        
+        return pnl / entry_value
+    
+    def calculate_roi(self) -> Decimal:
+        """
+        Calculate return on investment considering leverage.
+        
+        Returns:
+            ROI percentage based on margin used
+        """
+        pnl_percentage = self.calculate_pnl_percentage()
+        return pnl_percentage * Decimal(str(self.leverage))
+    
+    def get_position_value(self) -> Decimal:
+        """Get current position value."""
+        return self.current_price * Decimal(str(self.quantity))
+    
+    def get_initial_margin(self) -> Decimal:
+        """Calculate initial margin required."""
+        entry_value = self.entry_price * Decimal(str(self.quantity))
+        return entry_value / Decimal(str(self.leverage))

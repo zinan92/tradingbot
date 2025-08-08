@@ -27,12 +27,13 @@ class Symbol:
         if not value:
             raise InvalidSymbolError("Symbol cannot be empty")
         
-        # Validate symbol format (1-5 uppercase letters for US stocks)
-        # Can be extended for other markets (e.g., numbers for Asian markets)
-        if not re.match(r"^[A-Z]{1,5}$", value):
+        # Validate symbol format - support various market types
+        # US stocks: 1-5 uppercase letters
+        # Futures/Crypto: BTCUSDT, ETHUSDT format
+        if not re.match(r"^[A-Z0-9]{1,20}$", value):
             raise InvalidSymbolError(
                 f"Invalid symbol format: {value}. "
-                "Symbol must be 1-5 uppercase letters"
+                "Symbol must be alphanumeric (1-20 characters)"
             )
         
         object.__setattr__(self, "value", value)
@@ -55,6 +56,9 @@ class Symbol:
         elif exchange == "CRYPTO":
             # Crypto symbols often have formats like BTC-USD
             return re.match(r"^[A-Z]{2,10}(-[A-Z]{2,10})?$", self.value) is not None
+        elif exchange == "BINANCE_FUTURES":
+            # Binance futures symbols like BTCUSDT, ETHUSDT
+            return re.match(r"^[A-Z]{2,10}USDT$", self.value) is not None
         
         return True
     
@@ -94,7 +98,7 @@ class Symbol:
             return False
         
         value = value.strip().upper()
-        return bool(re.match(r"^[A-Z]{1,5}$", value))
+        return bool(re.match(r"^[A-Z0-9]{1,20}$", value))
 
 
 # Domain Exceptions

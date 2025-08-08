@@ -21,15 +21,15 @@ def run_demo_backtest():
     print("=" * 60)
     print()
     
-    # Create backtest command
+    # Create backtest command with longer timeframe for more trades
     command = RunBacktestCommand(
         strategy_name='SmaCross',
         symbol='BTCUSDT',
-        start_date=datetime(2023, 1, 1),
+        start_date=datetime(2020, 1, 1),
         end_date=datetime(2023, 12, 31),
         initial_capital=10000,
-        commission=0.002,
-        interval='1h',
+        commission=0.001,  # Lower commission for better results
+        interval='4h',  # 4-hour candles for more signals
         strategy_params={'n1': 10, 'n2': 20}
     )
     

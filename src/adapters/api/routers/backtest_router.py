@@ -14,6 +14,10 @@ import logging
 
 from src.application.backtesting.commands.run_backtest_command import RunBacktestCommand
 from src.application.backtesting.services.backtest_service import BacktestService
+from src.application.backtesting.services.unified_backtest_service import (
+    UnifiedBacktestService,
+    UnifiedBacktestRequest
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +28,9 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-# Initialize service (in production, use dependency injection)
+# Initialize services (in production, use dependency injection)
 backtest_service = BacktestService()
+unified_service = UnifiedBacktestService()
 
 
 # Request/Response DTOs
@@ -108,6 +113,60 @@ class BacktestResultsResponse(BaseModel):
         }
 
 
+class UnifiedBacktestRequestDTO(BaseModel):
+    """DTO for unified backtest request"""
+    strategy_id: str = Field(..., description="Strategy ID from registry")
+    symbols: List[str] = Field(..., description="List of trading symbols")
+    start_time: datetime = Field(..., description="Start time for backtest")
+    end_time: datetime = Field(..., description="End time for backtest")
+    initial_capital: float = Field(default=10000, gt=0, description="Starting capital")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "strategy_id": "momentum_macd_futures",
+                "symbols": ["BTCUSDT", "ETHUSDT", "BNBUSDT"],
+                "start_time": "2023-01-01T00:00:00",
+                "end_time": "2023-12-31T23:59:59",
+                "initial_capital": 10000
+            }
+        }
+
+
+class UnifiedBacktestResponseDTO(BaseModel):
+    """DTO for unified backtest response"""
+    job_id: str
+    strategy_id: str
+    strategy_name: str
+    symbols: List[str]
+    portfolio_stats: Optional[Dict[str, Any]] = None
+    symbol_results: Dict[str, Dict[str, Any]]
+    execution_time_ms: Optional[int] = None
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "job_id": "123e4567-e89b-12d3-a456-426614174000",
+                "strategy_id": "momentum_macd_futures",
+                "strategy_name": "MACD Momentum Futures",
+                "symbols": ["BTCUSDT", "ETHUSDT"],
+                "portfolio_stats": {
+                    "total_return": 125.5,
+                    "avg_sharpe_ratio": 1.2,
+                    "total_trades": 250
+                },
+                "symbol_results": {
+                    "BTCUSDT": {
+                        "return_pct": 85.3,
+                        "sharpe_ratio": 1.5,
+                        "trades": 150
+                    }
+                },
+                "execution_time_ms": 5420
+            }
+        }
+
+
 class OptimizeStrategyRequest(BaseModel):
     """DTO for strategy optimization request"""
     strategy: str = Field(..., description="Strategy name")
@@ -185,6 +244,74 @@ async def run_backtest(request: RunBacktestRequest, background_tasks: Background
         )
     except Exception as e:
         logger.error(f"Error running backtest: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error"
+        )
+
+
+@router.post("/run_unified",
+            response_model=UnifiedBacktestResponseDTO,
+            status_code=status.HTTP_201_CREATED,
+            summary="Run unified backtest",
+            description="Execute a backtest using strategy ID and multiple symbols")
+async def run_unified_backtest(request: UnifiedBacktestRequestDTO):
+    """
+    Run a unified backtest with strategy ID.
+    
+    This endpoint provides a simplified interface for backtesting:
+    - Takes strategy_id which encapsulates all configuration
+    - Supports multiple symbols with parallel execution
+    - Returns aggregated portfolio statistics
+    - Automatically selects appropriate engine (spot/futures)
+    
+    Example request:
+    ```json
+    {
+        "strategy_id": "momentum_macd_futures",
+        "symbols": ["BTCUSDT", "ETHUSDT"],
+        "start_time": "2023-01-01T00:00:00",
+        "end_time": "2023-12-31T23:59:59",
+        "initial_capital": 10000
+    }
+    ```
+    """
+    try:
+        # Create unified request
+        unified_request = UnifiedBacktestRequest(
+            strategy_id=request.strategy_id,
+            symbols=request.symbols,
+            start_time=request.start_time,
+            end_time=request.end_time,
+            initial_capital=request.initial_capital
+        )
+        
+        # Run backtest
+        result = await unified_service.run_backtest(unified_request)
+        
+        # Convert to response DTO
+        response = UnifiedBacktestResponseDTO(
+            job_id=str(result.job_id),
+            strategy_id=result.strategy_id,
+            strategy_name=result.strategy_name,
+            symbols=list(result.symbol_results.keys()),
+            portfolio_stats=result.portfolio_stats,
+            symbol_results={
+                symbol: res.to_dict()
+                for symbol, res in result.symbol_results.items()
+            },
+            execution_time_ms=result.execution_time_ms
+        )
+        
+        return response
+        
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Error running unified backtest: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error"
@@ -358,6 +485,134 @@ async def cancel_backtest(job_id: UUID):
         "job_id": job_id,
         "status": "cancelled",
         "message": "Backtest cancelled successfully"
+    }
+
+
+@router.get("/strategies",
+           summary="List available strategies",
+           description="Get list of all available strategy configurations")
+async def list_strategies(
+    category: Optional[str] = None,
+    trading_mode: Optional[str] = None,
+    enabled_only: bool = True
+):
+    """
+    List available strategy configurations.
+    
+    Filters:
+    - category: Filter by strategy category (momentum, reversion, grid, etc.)
+    - trading_mode: Filter by trading mode (spot, futures, margin)
+    - enabled_only: Only return enabled strategies
+    
+    Returns list of strategy configurations with their parameters.
+    """
+    from src.infrastructure.strategy.strategy_registry import get_registry
+    from src.domain.strategy.value_objects.strategy_configuration import (
+        StrategyCategory, TradingMode
+    )
+    
+    registry = get_registry()
+    
+    # Parse filters
+    cat_filter = None
+    if category:
+        try:
+            cat_filter = StrategyCategory(category.lower())
+        except ValueError:
+            pass
+    
+    mode_filter = None
+    if trading_mode:
+        try:
+            mode_filter = TradingMode(trading_mode.lower())
+        except ValueError:
+            pass
+    
+    # Get strategies
+    strategies = registry.list_strategies(
+        category=cat_filter,
+        trading_mode=mode_filter,
+        enabled_only=enabled_only
+    )
+    
+    # Convert to response
+    return {
+        "strategies": [
+            {
+                "id": s.strategy_id.id,
+                "name": s.strategy_id.name,
+                "version": s.strategy_id.version,
+                "category": s.strategy_id.category.value,
+                "trading_mode": s.trading_mode.value,
+                "interval": s.interval,
+                "leverage": s.leverage,
+                "description": s.description,
+                "enabled": s.enabled
+            }
+            for s in strategies
+        ],
+        "total": len(strategies)
+    }
+
+
+@router.get("/strategies/{strategy_id}",
+           summary="Get strategy details",
+           description="Get detailed configuration for a specific strategy")
+async def get_strategy_details(strategy_id: str):
+    """
+    Get detailed configuration for a specific strategy.
+    
+    Returns complete strategy configuration including:
+    - Strategy metadata
+    - Trading parameters
+    - Risk management settings
+    - Position sizing rules
+    """
+    from src.infrastructure.strategy.strategy_registry import get_registry
+    
+    registry = get_registry()
+    config = registry.get(strategy_id)
+    
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Strategy '{strategy_id}' not found"
+        )
+    
+    return config.to_dict()
+
+
+@router.get("/historical",
+           summary="Get historical backtest results",
+           description="Retrieve historical backtest results with filters")
+async def get_historical_results(
+    strategy_id: Optional[str] = None,
+    symbol: Optional[str] = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+    limit: int = 100
+):
+    """
+    Get historical backtest results from database.
+    
+    Filters:
+    - strategy_id: Filter by strategy
+    - symbol: Filter by trading symbol
+    - start_date: Results after this date
+    - end_date: Results before this date
+    - limit: Maximum results to return
+    """
+    results = await unified_service.get_historical_results(
+        strategy_id=strategy_id,
+        symbol=symbol,
+        start_date=start_date,
+        end_date=end_date,
+        limit=limit
+    )
+    
+    return {
+        "results": results,
+        "total": len(results)
     }
 
 

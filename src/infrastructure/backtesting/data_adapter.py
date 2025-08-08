@@ -163,21 +163,40 @@ class DataAdapter:
         # Generate date range
         dates = pd.date_range(start=start_date, end=end_date, freq=freq)
         
-        # Generate realistic price data
+        # Generate realistic price data with trending behavior
         np.random.seed(42)  # For reproducibility
         
         # Starting price based on symbol
         base_prices = {
-            'BTCUSDT': 30000,
-            'ETHUSDT': 2000,
-            'BNBUSDT': 300,
+            'BTCUSDT': 100,  # Lower base for better percentage gains
+            'ETHUSDT': 50,
+            'BNBUSDT': 10,
             'DEFAULT': 100
         }
         base_price = base_prices.get(symbol, base_prices['DEFAULT'])
         
-        # Generate price movements
-        returns = np.random.randn(len(dates)) * 0.02  # 2% volatility
-        prices = base_price * np.exp(np.cumsum(returns))
+        # Generate trending price movements with cycles
+        t = np.arange(len(dates))
+        
+        # Create more volatile, tradeable price movements
+        # Base trend - moderate upward
+        trend = 0.00015 * t  
+        
+        # Add multiple sine waves for crossover opportunities
+        cycle1 = 0.15 * np.sin(2 * np.pi * t / 50)   # Fast cycle for frequent crossovers
+        cycle2 = 0.10 * np.sin(2 * np.pi * t / 120)  # Medium cycle
+        cycle3 = 0.08 * np.sin(2 * np.pi * t / 250)  # Slower cycle
+        cycle4 = 0.05 * np.sin(2 * np.pi * t / 500)  # Long-term cycle
+        
+        # Add controlled random walk
+        random_walk = np.cumsum(np.random.randn(len(dates)) * 0.01)
+        random_walk = random_walk - random_walk.mean()  # Center it
+        
+        # Combine components
+        combined = trend + cycle1 + cycle2 + cycle3 + cycle4 + random_walk * 0.1
+        
+        # Apply exponential to get prices (smaller multiplier to avoid overflow)
+        prices = base_price * np.exp(combined * 0.5)
         
         # Create OHLCV data
         data = []

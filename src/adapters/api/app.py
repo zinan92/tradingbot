@@ -3,6 +3,9 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from decimal import Decimal
 from uuid import UUID
+import logging
+
+logger = logging.getLogger(__name__)
 
 from src.application.trading.commands.place_order_command import (
     PlaceOrderCommand,
@@ -22,12 +25,23 @@ from src.infrastructure.persistence.in_memory import (
     InMemoryOrderRepository,
     InMemoryPortfolioRepository,
 )
+from src.infrastructure.persistence.postgres.repositories import (
+    PostgresOrderRepository,
+    PostgresPortfolioRepository,
+    PostgresPositionRepository,
+)
 from src.infrastructure.brokers.mock_broker import MockBrokerService
 from src.infrastructure.messaging.in_memory_event_bus import InMemoryEventBus
+from src.application.trading.services.live_trading_service import LiveTradingService
+from src.application.trading.services.state_recovery_service import StateRecoveryService
+from src.application.trading.services.strategy_bridge import StrategyBridge, OptimalGridStrategyLive
+from src.config.trading_config import get_config
+import os
 from src.domain.trading.aggregates.portfolio import Portfolio
 
 # Import routers
 from src.adapters.api.routers import trading_router, backtest_router
+from src.adapters.api.routers.live_trading_router import router as live_trading_router
 
 # Create FastAPI app
 app = FastAPI(
@@ -37,12 +51,23 @@ app = FastAPI(
 )
 
 # Include routers
-app.include_router(trading_router.router)
-app.include_router(backtest_router.router)
+app.include_router(trading_router)
+app.include_router(backtest_router)
+app.include_router(live_trading_router)
 
-# Initialize infrastructure (in production, use dependency injection)
-portfolio_repo = InMemoryPortfolioRepository()
-order_repo = InMemoryOrderRepository()
+# Initialize infrastructure based on environment
+use_postgres = os.getenv("USE_POSTGRES", "false").lower() == "true"
+
+if use_postgres:
+    # Use PostgreSQL repositories for production
+    portfolio_repo = PostgresPortfolioRepository()
+    order_repo = PostgresOrderRepository()
+    position_repo = PostgresPositionRepository()
+else:
+    # Use in-memory repositories for development
+    portfolio_repo = InMemoryPortfolioRepository()
+    order_repo = InMemoryOrderRepository()
+    position_repo = None  # In-memory doesn't have separate position repo
 event_bus = InMemoryEventBus()
 # Configure broker with 90% cancellation success rate for realistic testing
 broker_service = MockBrokerService(
@@ -382,18 +407,126 @@ async def list_portfolios():
     ]
 
 
+# Global instances for live trading
+live_trading_service: Optional[LiveTradingService] = None
+state_recovery_service: Optional[StateRecoveryService] = None
+strategy_bridge: Optional[StrategyBridge] = None
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize services on startup"""
+    global live_trading_service, state_recovery_service, strategy_bridge
+    
+    config = get_config()
+    
+    if config.enabled:
+        # Initialize state recovery
+        state_recovery_service = StateRecoveryService(
+            state_dir="./trading_state",
+            snapshot_interval_seconds=60,
+            max_snapshots=100,
+            retention_days=7
+        )
+        
+        # Try to recover previous state
+        recovered_state = await state_recovery_service.recover_state()
+        
+        if use_postgres and position_repo:
+            # Initialize live trading service
+            live_trading_service = LiveTradingService(
+                portfolio_repository=portfolio_repo,
+                order_repository=order_repo,
+                position_repository=position_repo,
+                event_bus=event_bus,
+                config=config
+            )
+            
+            # Initialize strategy bridge
+            strategy_bridge = StrategyBridge(
+                event_bus=event_bus,
+                broker=None  # Will be set when session starts
+            )
+            
+            # Add configured strategy (OptimalGridStrategy)
+            if config.signal.auto_execute:
+                # Get strategy parameters from config
+                grid_config = {
+                    'atr_period': int(os.getenv('GRID_ATR_PERIOD', '14')),
+                    'grid_levels': int(os.getenv('GRID_LEVELS', '5')),
+                    'atr_multiplier': float(os.getenv('GRID_ATR_MULTIPLIER', '1.0')),
+                    'take_profit_pct': float(os.getenv('GRID_TAKE_PROFIT_PCT', '0.02')),
+                    'stop_loss_pct': float(os.getenv('GRID_STOP_LOSS_PCT', '0.05'))
+                }
+                
+                # Add strategy for configured symbols (default to BTCUSDT)
+                symbols = os.getenv('TRADING_SYMBOLS', 'BTCUSDT').split(',')
+                for symbol in symbols:
+                    strategy = OptimalGridStrategyLive(
+                        symbol=symbol.strip(),
+                        **grid_config
+                    )
+                    strategy_bridge.add_strategy(symbol.strip(), strategy)
+            
+            # If there was a recovered session, try to resume
+            if recovered_state and recovered_state.session:
+                if recovered_state.session.status.value == "RUNNING":
+                    try:
+                        await live_trading_service.start_session(
+                            recovered_state.session.portfolio_id
+                        )
+                        logger.info("Resumed previous trading session")
+                    except Exception as e:
+                        logger.error(f"Failed to resume session: {e}")
+        
+        logger.info("Live trading services initialized")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    global live_trading_service, state_recovery_service, strategy_bridge
+    
+    if strategy_bridge:
+        await strategy_bridge.stop()
+    
+    if live_trading_service and live_trading_service.current_session:
+        # Save critical state before shutdown
+        if state_recovery_service:
+            await state_recovery_service.save_critical_state(
+                session=live_trading_service.current_session,
+                reason="Application shutdown",
+                additional_data={
+                    "active_orders": len(live_trading_service.active_orders),
+                    "active_positions": len(live_trading_service.active_positions)
+                }
+            )
+        
+        # Stop trading session
+        await live_trading_service.stop_session("Application shutdown")
+    
+    logger.info("Live trading services shut down")
+
+
 # Health check endpoint
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return {
+    health_data = {
         "status": "healthy",
         "service": "trading-api",
         "repositories": {
-            "portfolios": portfolio_repo.count(),
-            "orders": order_repo.count()
+            "portfolios": portfolio_repo.count() if hasattr(portfolio_repo, 'count') else "N/A",
+            "orders": order_repo.count() if hasattr(order_repo, 'count') else "N/A"
         }
     }
+    
+    # Add live trading status if available
+    if live_trading_service:
+        status = live_trading_service.get_session_status()
+        health_data["live_trading"] = status if status else {"status": "no_session"}
+    
+    return health_data
 
 
 if __name__ == "__main__":
