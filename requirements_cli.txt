@@ -1,0 +1,5 @@
+# CLI Dependencies
+click>=8.1.0
+rich>=13.0.0
+aiohttp>=3.9.0
+websocket-client>=1.6.0

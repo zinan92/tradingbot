@@ -79,7 +79,7 @@ class PositionModel(Base):
     closing_order_id = Column(UUID(as_uuid=True), nullable=True)
     
     # Additional data
-    metadata = Column(Text, nullable=True)  # JSON string for additional data
+    position_metadata = Column(Text, nullable=True)  # JSON string for additional data
     notes = Column(Text, nullable=True)  # Trading notes
     
     # Relationships

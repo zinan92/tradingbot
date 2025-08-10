@@ -103,7 +103,7 @@ class OrderModel(Base):
     time_in_force = Column(String(10), default="GTC")
     
     # Additional metadata
-    metadata = Column(Text, nullable=True)  # JSON string for additional data
+    order_metadata = Column(Text, nullable=True)  # JSON string for additional data
     
     # Relationships
     portfolio = relationship("PortfolioModel", back_populates="orders")

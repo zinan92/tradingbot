@@ -8,16 +8,18 @@ mode:
   paper_trading_days: 7  # Days to paper trade before live
 
 # Binance API Configuration
+# NOTE: API keys should be set in .env file for security!
+# These values are placeholders and will be overridden by .env
 binance:
   testnet:
-    api_key: "YOUR_TESTNET_API_KEY"  # Get from https://testnet.binancefuture.com/
-    api_secret: "YOUR_TESTNET_API_SECRET"
+    api_key: "PLACEHOLDER_USE_ENV_FILE"  # Set in .env as BINANCE_TESTNET_API_KEY
+    api_secret: "PLACEHOLDER_USE_ENV_FILE"  # Set in .env as BINANCE_TESTNET_API_SECRET
     base_url: "https://testnet.binancefuture.com"
     ws_url: "wss://stream.binancefuture.com"
   
   production:
-    api_key: "YOUR_PRODUCTION_API_KEY"  # Get from https://www.binance.com/en/my/settings/api-management
-    api_secret: "YOUR_PRODUCTION_API_SECRET"
+    api_key: "PLACEHOLDER_USE_ENV_FILE"  # Set in .env as BINANCE_API_KEY
+    api_secret: "PLACEHOLDER_USE_ENV_FILE"  # Set in .env as BINANCE_API_SECRET
     base_url: "https://fapi.binance.com"
     ws_url: "wss://fstream.binance.com"
 

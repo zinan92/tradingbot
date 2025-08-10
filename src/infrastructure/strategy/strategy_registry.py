@@ -69,6 +69,11 @@ class StrategyRegistry:
                 AdaptiveSmaCrossStrategy
             )
             
+            # New indicator strategies
+            from src.application.backtesting.strategies.ema_cross_strategy import EMACrossStrategy
+            from src.application.backtesting.strategies.rsi_strategy import RSIStrategy
+            from src.application.backtesting.strategies.macd_strategy import MACDStrategy
+            
             # Futures strategies
             from src.application.backtesting.strategies.futures_sma_cross_strategy import (
                 FuturesSmaCrossStrategy,
@@ -87,6 +92,9 @@ class StrategyRegistry:
                 'SmaCrossStrategy': SmaCrossStrategy,
                 'EnhancedSmaCrossStrategy': EnhancedSmaCrossStrategy,
                 'AdaptiveSmaCrossStrategy': AdaptiveSmaCrossStrategy,
+                'EMACrossStrategy': EMACrossStrategy,
+                'RSIStrategy': RSIStrategy,
+                'MACDStrategy': MACDStrategy,
                 'FuturesSmaCrossStrategy': FuturesSmaCrossStrategy,
                 'FuturesMeanReversionStrategy': FuturesMeanReversionStrategy,
                 'FuturesMomentumStrategy': FuturesMomentumStrategy,

@@ -25,11 +25,19 @@ from src.infrastructure.persistence.in_memory import (
     InMemoryOrderRepository,
     InMemoryPortfolioRepository,
 )
-from src.infrastructure.persistence.postgres.repositories import (
-    PostgresOrderRepository,
-    PostgresPortfolioRepository,
-    PostgresPositionRepository,
-)
+try:
+    from src.infrastructure.persistence.postgres.repositories import (
+        PostgresPortfolioRepository,
+        PostgresPositionRepository,
+    )
+    from src.infrastructure.persistence.postgres.repositories.order_repository import (
+        PostgresOrderRepository
+    )
+except ImportError:
+    # Fallback if postgres is not configured
+    PostgresOrderRepository = None
+    PostgresPortfolioRepository = None
+    PostgresPositionRepository = None
 from src.infrastructure.brokers.mock_broker import MockBrokerService
 from src.infrastructure.messaging.in_memory_event_bus import InMemoryEventBus
 from src.application.trading.services.live_trading_service import LiveTradingService
@@ -42,6 +50,9 @@ from src.domain.trading.aggregates.portfolio import Portfolio
 # Import routers
 from src.adapters.api.routers import trading_router, backtest_router
 from src.adapters.api.routers.live_trading_router import router as live_trading_router
+from src.adapters.api.health_router import router as health_router
+from src.adapters.api.metrics_router import router as metrics_router
+from src.adapters.api.risk_router import router as risk_router
 
 # Create FastAPI app
 app = FastAPI(
@@ -54,6 +65,9 @@ app = FastAPI(
 app.include_router(trading_router)
 app.include_router(backtest_router)
 app.include_router(live_trading_router)
+app.include_router(health_router)
+app.include_router(metrics_router)
+app.include_router(risk_router)
 
 # Initialize infrastructure based on environment
 use_postgres = os.getenv("USE_POSTGRES", "false").lower() == "true"

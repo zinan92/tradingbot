@@ -1,0 +1,193 @@
+name: Architecture Check
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'src/**/*.py'
+      - 'flake8_hexagonal.py'
+      - '.flake8'
+      - 'setup.py'
+
+jobs:
+  hexagonal-architecture:
+    name: Enforce Hexagonal Architecture
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Cache pip packages
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements*.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install flake8 flake8-import-order
+        # Install our package with the custom plugin
+        pip install -e .
+    
+    - name: Check architecture violations
+      id: flake8
+      run: |
+        echo "## Architecture Check Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Run flake8 with our custom plugin
+        if flake8 src/ --select=HEX --exit-zero > violations.txt 2>&1; then
+          if [ -s violations.txt ]; then
+            echo "❌ **Architecture violations found:**" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat violations.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "violations_found=true" >> $GITHUB_OUTPUT
+          else
+            echo "✅ **No architecture violations found!**" >> $GITHUB_STEP_SUMMARY
+            echo "violations_found=false" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "❌ **Flake8 failed to run**" >> $GITHUB_STEP_SUMMARY
+          exit 1
+        fi
+    
+    - name: Fail if violations found
+      if: steps.flake8.outputs.violations_found == 'true'
+      run: |
+        echo "::error::Architecture violations detected. Please fix the following issues:"
+        cat violations.txt
+        exit 1
+    
+    - name: Generate detailed report
+      if: always()
+      run: |
+        echo "### Detailed Architecture Report" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Count violations by type
+        echo "#### Violation Summary" >> $GITHUB_STEP_SUMMARY
+        echo "| Rule | Description | Count |" >> $GITHUB_STEP_SUMMARY
+        echo "|------|-------------|-------|" >> $GITHUB_STEP_SUMMARY
+        
+        HEX001_COUNT=$(grep -c "HEX001" violations.txt 2>/dev/null || echo 0)
+        HEX002_COUNT=$(grep -c "HEX002" violations.txt 2>/dev/null || echo 0)
+        HEX003_COUNT=$(grep -c "HEX003" violations.txt 2>/dev/null || echo 0)
+        
+        echo "| HEX001 | Domain layer importing from infra/app | $HEX001_COUNT |" >> $GITHUB_STEP_SUMMARY
+        echo "| HEX002 | Application layer importing from infra | $HEX002_COUNT |" >> $GITHUB_STEP_SUMMARY
+        echo "| HEX003 | Using concrete impl instead of port | $HEX003_COUNT |" >> $GITHUB_STEP_SUMMARY
+        
+        # Add fix suggestions
+        if [ "$HEX001_COUNT" -gt 0 ] || [ "$HEX002_COUNT" -gt 0 ] || [ "$HEX003_COUNT" -gt 0 ]; then
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### 🔧 How to Fix" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. **HEX001/HEX002**: Move the logic to the appropriate layer or use a port interface" >> $GITHUB_STEP_SUMMARY
+          echo "2. **HEX003**: Replace concrete implementations with port interfaces from \`src/domain/ports/\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Example fix:" >> $GITHUB_STEP_SUMMARY
+          echo '```python' >> $GITHUB_STEP_SUMMARY
+          echo "# ❌ Wrong" >> $GITHUB_STEP_SUMMARY
+          echo "from src.infrastructure.backtesting import BacktestEngine" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# ✅ Correct" >> $GITHUB_STEP_SUMMARY
+          echo "from src.domain.ports.backtest_port import BacktestPort" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+        fi
+    
+    - name: Comment on PR
+      if: github.event_name == 'pull_request' && steps.flake8.outputs.violations_found == 'true'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+          const violations = fs.readFileSync('violations.txt', 'utf8');
+          
+          const comment = `## 🏗️ Architecture Check Failed
+          
+          Your changes violate the hexagonal architecture rules. Please fix the following issues:
+          
+          \`\`\`
+          ${violations}
+          \`\`\`
+          
+          ### 📚 Architecture Guidelines
+          
+          - **Domain layer**: Can only import from domain layer
+          - **Application layer**: Can import from domain and application layers
+          - **Infrastructure layer**: Can import from any layer
+          - **Use Ports**: Always use port interfaces instead of concrete implementations
+          
+          ### 🔧 Quick Fixes
+          
+          1. Replace infrastructure imports with port interfaces
+          2. Move business logic from infrastructure to domain/application
+          3. Use dependency injection to provide implementations
+          
+          See [Architecture Guide](docs/architecture.md) for more details.`;
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
+
+  import-order:
+    name: Check Import Order
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install flake8
+      run: |
+        pip install flake8 flake8-import-order
+    
+    - name: Check import order
+      run: |
+        flake8 src/ --select=I --import-order-style=google --application-import-names=src
+
+  architecture-diagram:
+    name: Generate Architecture Diagram
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install pydeps graphviz
+    
+    - name: Generate dependency graph
+      run: |
+        # Generate architecture diagram
+        pydeps src --max-bacon=2 --cluster --noshow -o architecture.svg
+    
+    - name: Upload diagram
+      uses: actions/upload-artifact@v3
+      with:
+        name: architecture-diagram
+        path: architecture.svg

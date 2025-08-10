@@ -1,0 +1,41 @@
+[flake8]
+max-line-length = 100
+exclude = 
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    env,
+    build,
+    dist,
+    .eggs,
+    *.egg-info,
+    .pytest_cache,
+    .mypy_cache,
+    migrations
+
+# Extended ignore list
+ignore = 
+    E203,  # whitespace before ':'
+    W503,  # line break before binary operator
+    E501,  # line too long (handled by max-line-length)
+
+# Custom plugins
+per-file-ignores =
+    # Allow infrastructure imports in tests
+    tests/*:HEX001,HEX002,HEX003
+    # Allow infrastructure imports in scripts
+    scripts/*:HEX001,HEX002,HEX003
+    # Allow in setup files
+    setup.py:HEX001,HEX002,HEX003
+    
+# Import order configuration
+import-order-style = google
+application-import-names = src
+
+# Enable custom hexagonal architecture plugin
+# Install with: pip install -e .
+enable-extensions = HEX
+
+# Hexagonal architecture rules
+hex-enforce = true

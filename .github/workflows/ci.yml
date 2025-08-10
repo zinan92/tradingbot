@@ -1,0 +1,362 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: '3.12'
+  CACHE_VERSION: v1
+
+jobs:
+  lint:
+    name: Lint Code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Cache pip packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ env.CACHE_VERSION }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ env.CACHE_VERSION }}-
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff black isort mypy
+      
+      - name: Run Ruff linter
+        run: ruff check src/ tests/
+        continue-on-error: true
+      
+      - name: Check code formatting with Black
+        run: black --check src/ tests/
+        continue-on-error: true
+      
+      - name: Check import sorting with isort
+        run: isort --check-only src/ tests/
+        continue-on-error: true
+      
+      - name: Type checking with mypy
+        run: mypy src/ --ignore-missing-imports
+        continue-on-error: true
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Cache pip packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ env.CACHE_VERSION }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ env.CACHE_VERSION }}-
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov pytest-mock
+      
+      - name: Run unit tests
+        run: |
+          pytest tests/unit/ -v --cov=src --cov-report=xml --cov-report=term
+      
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+        continue-on-error: true
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: tradingbot_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Cache pip packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ env.CACHE_VERSION }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ env.CACHE_VERSION }}-
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov
+      
+      - name: Wait for services
+        run: |
+          for i in {1..30}; do
+            if pg_isready -h localhost -p 5432 -U testuser; then
+              echo "PostgreSQL is ready"
+              break
+            fi
+            echo "Waiting for PostgreSQL..."
+            sleep 2
+          done
+          
+          for i in {1..30}; do
+            if redis-cli -h localhost -p 6379 ping; then
+              echo "Redis is ready"
+              break
+            fi
+            echo "Waiting for Redis..."
+            sleep 2
+          done
+      
+      - name: Run integration tests
+        env:
+          DATABASE_URL: postgresql://testuser:testpass@localhost:5432/tradingbot_test
+          REDIS_URL: redis://localhost:6379
+          CI: true
+        run: |
+          pytest tests/integration/ -v --cov=src --cov-report=xml --cov-append
+      
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          flags: integrationtests
+          name: codecov-umbrella
+        continue-on-error: true
+
+  acceptance-backtest:
+    name: Acceptance Backtest
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests]
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Cache pip packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ env.CACHE_VERSION }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ env.CACHE_VERSION }}-
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Create mock market data
+        run: |
+          # Create mock data directory
+          mkdir -p data/binance
+          
+          # Generate mock BTCUSDT 5m data for acceptance test
+          python -c "
+          import pandas as pd
+          import numpy as np
+          from datetime import datetime, timedelta
+          import json
+          
+          # Generate 30 days of 5-minute candles
+          end = datetime.now()
+          start = end - timedelta(days=30)
+          dates = pd.date_range(start=start, end=end, freq='5min')
+          
+          # Generate realistic price data
+          np.random.seed(42)  # Reproducible results
+          base_price = 45000
+          returns = np.random.normal(0.0001, 0.01, len(dates))
+          prices = base_price * np.exp(np.cumsum(returns))
+          
+          # Create OHLCV data
+          data = {
+              'timestamp': dates.astype(str).tolist(),
+              'open': (prices * (1 + np.random.uniform(-0.001, 0.001, len(dates)))).tolist(),
+              'high': (prices * (1 + np.random.uniform(0, 0.005, len(dates)))).tolist(),
+              'low': (prices * (1 - np.random.uniform(0, 0.005, len(dates)))).tolist(),
+              'close': prices.tolist(),
+              'volume': (np.random.uniform(100, 1000, len(dates))).tolist()
+          }
+          
+          # Save as JSON for the mock
+          with open('data/binance/BTCUSDT_5m.json', 'w') as f:
+              json.dump(data, f)
+          
+          print(f'Generated {len(dates)} candles for BTCUSDT 5m')
+          "
+      
+      - name: Run acceptance backtest
+        env:
+          CI: true
+          ACCEPTANCE_TEST: true
+        run: |
+          echo "Running acceptance backtest..."
+          python scripts/acceptance_backtest.py
+      
+      - name: Archive backtest artifacts
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: acceptance-backtest-results
+          path: |
+            artifacts/acceptance/
+          retention-days: 30
+      
+      - name: Check performance thresholds
+        run: |
+          echo "Checking performance metrics..."
+          python -c "
+          import json
+          import sys
+          
+          with open('artifacts/acceptance/metrics.json', 'r') as f:
+              metrics = json.load(f)
+          
+          print('Performance Metrics:')
+          print(f'  Sharpe Ratio: {metrics.get(\"sharpe\", 0):.2f}')
+          print(f'  Max Drawdown: {metrics.get(\"max_dd\", 100):.1f}%')
+          print(f'  Win Rate: {metrics.get(\"win_rate\", 0):.1f}%')
+          
+          # Validation is already done in acceptance_backtest.py
+          # This is just for visibility in CI logs
+          "
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install security tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install bandit safety
+      
+      - name: Run Bandit security scan
+        run: bandit -r src/ -f json -o bandit-report.json
+        continue-on-error: true
+      
+      - name: Check for known vulnerabilities
+        run: safety check --json
+        continue-on-error: true
+      
+      - name: Upload security reports
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-reports
+          path: |
+            bandit-report.json
+          retention-days: 30
+
+  build-docker:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: [acceptance-backtest]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+        continue-on-error: true
+      
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false  # Set to true when Docker Hub credentials are configured
+          tags: |
+            tradingbot:latest
+            tradingbot:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+        continue-on-error: true
+
+  notify-status:
+    name: Notify Build Status
+    runs-on: ubuntu-latest
+    needs: [acceptance-backtest]
+    if: always()
+    steps:
+      - name: Notify success
+        if: ${{ success() }}
+        run: |
+          echo "✅ CI/CD Pipeline completed successfully!"
+          echo "All tests passed including acceptance backtest."
+      
+      - name: Notify failure
+        if: ${{ failure() }}
+        run: |
+          echo "❌ CI/CD Pipeline failed!"
+          echo "Please check the failing jobs above."
+          exit 1
