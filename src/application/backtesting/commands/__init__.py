@@ -1,3 +1,0 @@
-"""
-Backtesting Commands Module
-"""

@@ -109,14 +109,16 @@ class ApiService {
 
   // Health monitoring endpoints
   async getHealthSummary(): Promise<HealthSummary> {
+    // DDD API health summary endpoint
     return this.fetchJson<HealthSummary>(
-      `${API_BASE_URL}/api/health/summary`,
+      `${API_BASE_URL}/health/summary`,
       {},
       'health'
     );
   }
 
   async getRiskSummary(): Promise<RiskSummary> {
+    // DDD API risk summary
     return this.fetchJson<RiskSummary>(
       `${API_BASE_URL}/api/risk/summary`,
       {},
@@ -125,8 +127,9 @@ class ApiService {
   }
 
   async getLivePositions(): Promise<LivePosition[]> {
+    // DDD API live-trading positions
     return this.fetchJson<LivePosition[]>(
-      `${API_BASE_URL}/api/live/positions`,
+      `${API_BASE_URL}/api/v1/live-trading/positions`,
       {},
       'positions'
     );
@@ -142,22 +145,25 @@ class ApiService {
 
   // Live trading control actions
   async pauseLiveTrading(): Promise<ApiActionResponse> {
+    // DDD API bridge endpoint
     return this.fetchJson<ApiActionResponse>(
-      `${API_BASE_URL}/api/live/pause`,
+      `${API_BASE_URL}/api/v1/live-trading/pause`,
       { method: 'POST', headers: { 'Content-Type': 'application/json' } }
     );
   }
 
   async stopLiveTrading(): Promise<ApiActionResponse> {
+    // DDD API bridge endpoint
     return this.fetchJson<ApiActionResponse>(
-      `${API_BASE_URL}/api/live/stop`,
+      `${API_BASE_URL}/api/v1/live-trading/stop`,
       { method: 'POST', headers: { 'Content-Type': 'application/json' } }
     );
   }
 
   async closeAllPositions(reason?: string): Promise<ApiActionResponse> {
+    // DDD API bridge endpoint
     return this.fetchJson<ApiActionResponse>(
-      `${API_BASE_URL}/api/live/close-all`,
+      `${API_BASE_URL}/api/v1/live-trading/close-all`,
       { 
         method: 'POST', 
         headers: { 'Content-Type': 'application/json' },
